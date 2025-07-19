@@ -175,8 +175,8 @@ The driver operates in one of three states, which can be queried using `State ge
 ```cpp
 enum State {
     STATE_OFF,      // Driver stopped, no data transmission
-    STATE_RUN_OK,   // Normal operation, actively receiving data via DMA
-    STATE_RUN_OVF   // Overflow detected, DMA paused until buffer drained
+    STATE_RUN_OK,   // Normal operation, actively sending/receiving data via DMA
+    STATE_RUN_OVF   // Overflow detected, RX DMA paused until buffer drained
 };
 ```
 
@@ -530,7 +530,7 @@ Flawless data transmission under normal conditions:
 ### Event Latency
 Observed delay between event generation & reception timestamps is in the order of magnitude of RTOS context switch time in normal conditions. Under 80% load, it is much lower than watchdog tick in average and barely exceeds it, which validates our configuration safety assumptions of a 3X safety margin for both chunk size & RX buffer overflow threshold:
 *   **Normal conditions:** 9µs average, 7µs min, 19µs max
-*   **80% CPU stress:** 70~120µs average, 300~450µs max (more variability but always in safe zone)
+*   **80% CPU stress:** 70-120µs average, 300-450µs max (more variability but always in safe zone)
 
 ### Real-Time Performance
 All real-time features achieve 100% success rate even in the worst-case CPU load scenario (80%):
@@ -544,8 +544,7 @@ All real-time features achieve 100% success rate even in the worst-case CPU load
 **Prerequisites:**
 - Pico-SDK installed & CMake project configured for your chip (RP2040/RP2350)
 - C++17 minimum enabled - does not compile with pure C projects
-- FreeRTOS setup for Pico platform - see example [here](https://github.com/pierrejay/pico-freertos-setup)
-- This repository contains the drop-in `freertos` folder listed above including configuration file, hooks, and `CMakeLists` file
+- FreeRTOS setup for Pico platform - see example [here](https://github.com/pierrejay/pico-freertos-setup) with a drop-in `freertos` folder including configuration file, hooks, and `CMakeLists` file
 
 **Integration in your project:**
 
