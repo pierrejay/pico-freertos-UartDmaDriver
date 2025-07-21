@@ -3,6 +3,8 @@
 #include <FreeRTOS.h>
 #include <semphr.h>
 
+namespace UartDmaSync {
+
 /* @brief RAII wrapper for a FreeRTOS mutex
 * @note Offers a try-lock mechanism
 */
@@ -63,3 +65,5 @@ private:
     StaticSemaphore_t _semBuf;
     SemaphoreHandle_t _sem;
 };
+
+} // namespace UartDmaSync
