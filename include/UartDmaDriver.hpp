@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <cstdio>
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "hardware/dma.h"
@@ -51,7 +52,7 @@
     #define UART_RX_MAX_EVT_DATA_SIZE 256
 #endif
 #ifndef UART_EVENT_Q_SIZE // Define the depth of event queue (in # events)
-    #define UART_EVENT_Q_SIZE 20
+    #define UART_EVENT_Q_SIZE 32
 #endif
 #ifndef UART_WD_TICK_US // Define the tick time for DMA watchdog (ISR invoked every tick)
     #define UART_WD_TICK_US 450
@@ -62,6 +63,7 @@
 #ifndef UART_TX_BUFFER_SIZE // Define the TX buffer size for DMA transfers
     #define UART_TX_BUFFER_SIZE 256
 #endif
+
 
 class UartDmaDriver {
 public:
@@ -95,6 +97,7 @@ public:
     }
     static inline Result Error(Result res, const char* msg = nullptr) {
         // Placeholder to manage detailed logging; for now, just return the error
+        // printf("[UartDmaDriver] Error: %s (%s)\n", toString(res), msg ? msg : "-");
         return res;
     }
     static inline Result Success() {
@@ -108,7 +111,7 @@ public:
     using Mutex = UartDmaSync::Mutex;
     using Lock = UartDmaSync::Lock;
     using BinarySemaphore = UartDmaSync::BinarySemaphore;
-    
+
     // ===================================================================================
     // DATA STRUCTURES
     // ===================================================================================
@@ -145,6 +148,16 @@ public:
     // UartDma default settings
     static constexpr uint32_t RX_MAX_BAUDRATE = UART_RX_MAX_BAUDRATE;
     static constexpr int UART_MAX_INSTANCES = 2;
+    static constexpr uint32_t MIN_RUNTIME_WD_TICK_US = 100; // Minimum watchdog tick time in microseconds
+    static constexpr uint32_t MAX_RUNTIME_WD_TICK_US = 10000; // Maximum watchdog tick time in microseconds
+    static constexpr uint8_t MIN_RUNTIME_WD_SILENCE_TICKS = 2; // Minimum silence ticks
+    static constexpr uint8_t MAX_RUNTIME_WD_SILENCE_TICKS = 20; // Maximum silence ticks
+    
+    // Standard baud rates - enforced for reliable timing calculations
+    static constexpr uint32_t STANDARD_BAUDRATES[] = {
+        9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600
+    };
+    static constexpr size_t NUM_STANDARD_BAUDRATES = sizeof(STANDARD_BAUDRATES) / sizeof(STANDARD_BAUDRATES[0]);
 
     // Data chunks queue settings
     static constexpr size_t EVTQ_MAX_EVT_DATA_SIZE = UART_RX_MAX_EVT_DATA_SIZE;
@@ -189,6 +202,11 @@ public:
     bool isOverflowed() const;
     State getState() const;
     uint32_t getDropped() const { return _queueDropped; }
+
+    // Runtime configuration
+    Result setWatchdogTiming(uint32_t tickUs, uint8_t silenceTicks);  // Only when stopped
+    Result setBaudrate(uint32_t baudRate);                            // Hot change (when safe)
+    static bool isStandardBaudrate(uint32_t baudRate);                // Validation helper
     
     // TX
     Result send(const uint8_t* data, size_t len, TickType_t waitTicks = portMAX_DELAY);
@@ -247,6 +265,10 @@ private:
     // Watchdog timer
     repeating_timer_t _watchdogTimerHandle;  // Hardware timer handle
     volatile uint8_t _silenceTicks;          // Silence counter
+    
+    // Configurable timing parameters (defaults from compile-time macros)
+    uint32_t _watchdogTickUs;                // Watchdog tick period in microseconds
+    uint8_t _watchdogSilenceTicks;           // Number of ticks for silence detection
 
     // DMA & watchdog timer lifecycle
     Result initDMA();      // Initialize state and pointers once

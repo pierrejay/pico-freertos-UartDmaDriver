@@ -17,9 +17,6 @@
 
 
 /*@brief Static assertions to ensure configuration correctness
- *
- * This namespace contains static assertions that verify the configuration of the UartDmaDriver.
- * It ensures that Watchdog timer & event queue configuration settings are correct.
  */
 namespace UartDmaDriver_Assert {
 
@@ -28,12 +25,10 @@ constexpr uint32_t maxBytesPerTick =
     ((UartDmaDriver::RX_MAX_BAUDRATE / 10) * UART_WD_TICK_US + 999'999) / 1'000'000;
 
 // ASSERT 1 - DMA buffer size check
-// DMA buffer size shall be a valid power of 2
 static_assert(UART_DMA_RING_BITS >= 9 && UART_DMA_RING_BITS <= 15,
-              "UART_DMA_RING_BITS should be 9-15 (2^9 to 2^15 = 512-32768 bytes RX buffer). ");
+              "UART_DMA_RING_BITS should be 9-15 (2^9 to 2^15 = 512-32768 bytes RX buffer)");
 
 // ASSERT 2 - Buffer overflow detection capability check
-// At max baud rate, the watermark shall be reached in less than 3 watchdog ticks
 static_assert(
     UartDmaDriver::DMA_OVERFLOW_WATERMARK >= 3 * maxBytesPerTick,
     "CONFIG WARNING: UART_WD_TICK_US too long for max baudrate; "
@@ -41,21 +36,20 @@ static_assert(
 );
 
 // ASSERT 3 - Queue size check
-// Queue shall be able to hold at least one full DMA buffer split in full chunks + 1 overflow event + 1 free slot left
 constexpr size_t maxQueueStorage = UART_RX_MAX_EVT_DATA_SIZE * (UART_EVENT_Q_SIZE - 2);
 static_assert(
     maxQueueStorage > UartDmaDriver::DMA_RX_BUFFER_SIZE,
-    "CONFIG WARNING: queue can hold less than the DMA buffer size + margin ;"
-    "increase UART_EVENT_Q_SIZE or UART_RX_MAX_EVT_DATA_SIZE."
+    "CONFIG WARNING: queue can hold less than the DMA buffer size + margin; "
+    "increase UART_EVENT_Q_SIZE or UART_RX_MAX_EVT_DATA_SIZE"
 );
 
 // ASSERT 4 - Max chunk size check
-// At max baud rate, the max chunk size shall be higher than 3 watchdog ticks worth of data
 static_assert(
     UART_RX_MAX_EVT_DATA_SIZE > 3 * maxBytesPerTick,
-    "CONFIG WARNING: throughput may be too high for the selected chunk size ; "
+    "CONFIG WARNING: throughput may be too high for the selected chunk size; "
     "increase UART_RX_MAX_EVT_DATA_SIZE or decrease UART_WD_TICK_US."
 );
+
 } // namespace UartDmaDriver_Assert
 
 
@@ -158,7 +152,13 @@ UartDmaDriver::UartDmaDriver(uart_inst_t* uart, uint8_t txPin, uint8_t rxPin,
     _lastDmaWritePos(0),
     _dmaTxChannel(-1),
     _watchdogTimerHandle(),
-    _silenceTicks(0) {}
+    _silenceTicks(0),
+    _watchdogTickUs(UART_WD_TICK_US),              // Initialize with compile-time defaults
+    _watchdogSilenceTicks(UART_WD_SILENCE_TICKS)   // Initialize with compile-time defaults
+{
+    // Constructor validation happens at object creation
+    // Validation errors will be caught during init() call
+}
 
 
 /*@brief Destructor (cleans up UartDmaDriver)
@@ -206,6 +206,9 @@ UartDmaDriver::Result UartDmaDriver::init() {
     // Validate UART parameters
     if (_baudRate == 0 || _baudRate > RX_MAX_BAUDRATE) {
         return Error(ERR_CONFIG, "Invalid baud rate");
+    }
+    if (!isStandardBaudrate(_baudRate)) {
+        return Error(ERR_CONFIG, "Non-standard baud rate - use 9600, 19200, 38400, 57600, 115200, 230400, 460800, or 921600");
     }
     if (_dataBits < 5 || _dataBits > 8) {
         return Error(ERR_CONFIG, "Invalid data bits (must be 5-8)");
@@ -293,6 +296,91 @@ UartDmaDriver::Result UartDmaDriver::stop() {
     setRunState(STATE_OFF);
     
     return Success();
+}
+
+/*@brief Set watchdog timer configuration
+* @param tickUs: Watchdog timer tick period in microseconds (100-2000)
+* @param silenceTicks: Number of ticks to consider as silence (2-20)
+* @return SUCCESS if configuration was set, error otherwise
+* @note Driver must be stopped (STATE_OFF) to change timing
+*/
+UartDmaDriver::Result UartDmaDriver::setWatchdogTiming(uint32_t tickUs, uint8_t silenceTicks) {
+    if (getState() != STATE_OFF) {
+        return Error(ERR_STATE, "Cannot change timing while driver is running");
+    }
+    
+    // Basic parameter validation
+    if (tickUs < MIN_RUNTIME_WD_TICK_US || tickUs > MAX_RUNTIME_WD_TICK_US) {
+        return Error(ERR_CONFIG, "tickUs must be 100-10000 microseconds");
+    }
+    if (MIN_RUNTIME_WD_SILENCE_TICKS < 2 || MAX_RUNTIME_WD_SILENCE_TICKS > 20) {
+        return Error(ERR_CONFIG, "silenceTicks must be 2-20 ticks");
+    }
+    
+    // Validate against overflow safety (same logic as static assert)
+    uint32_t maxBytesPerTick = ((_baudRate / 10) * tickUs + 999999) / 1000000;
+    if (DMA_OVERFLOW_WATERMARK < 3 * maxBytesPerTick) {
+        return Error(ERR_CONFIG, "Tick time too long for current baud rate - reduce tickUs");
+    }
+    if (EVTQ_MAX_EVT_DATA_SIZE < 3 * maxBytesPerTick) {
+        return Error(ERR_CONFIG, "Chunk size too small for current baud rate - reduce tickUs");
+    }
+    
+    // Store new timing configuration (applied on next start())
+    _watchdogTickUs = tickUs;
+    _watchdogSilenceTicks = silenceTicks;
+    
+    return Success();
+}
+
+/*@brief Set UART baud rate at runtime (hot change when safe)
+* @param baudRate: New baud rate (must be standard)  
+* @return SUCCESS if baud rate was changed, error otherwise
+* @note Safe to call during operation - waits for TX completion, protects RX
+*/
+UartDmaDriver::Result UartDmaDriver::setBaudrate(uint32_t baudRate) {
+    // Validate standard baud rate first
+    if (!isStandardBaudrate(baudRate)) {
+        return Error(ERR_CONFIG, "Non-standard baud rate - use 9600, 19200, 38400, 57600, 115200, 230400, 460800, or 921600");
+    }
+    
+    // Reject change if higher than configured maximum - ensures timing safety contract
+    // still applies even if the baud rate is valid
+    if (baudRate > RX_MAX_BAUDRATE) {
+        return Error(ERR_CONFIG, "Baud rate exceeds maximum");
+    }
+    
+    // Critical section for thread safety
+    Lock guard(_drvMutex);
+    
+    if (!_initialized) {
+        return Error(ERR_NOT_INITIALIZED, "Driver not initialized");
+    }
+    
+    // If driver is running, ensure safe state for baud rate change
+    State currentState = getRunState();
+    if (currentState != STATE_OFF) {
+        return Error(ERR_CONFIG, "Driver must be stopped before changing baud rate");
+    } else {
+        // Driver stopped - just change the hardware setting
+        uart_set_baudrate(_uart, baudRate);
+        _baudRate = baudRate; // Update stored baud rate
+    }
+    
+    return Success();
+}
+
+/*@brief Check if a baud rate is in the list of standard rates
+* @param baudRate: Baud rate to validate
+* @return true if baud rate is standard, false otherwise
+*/
+bool UartDmaDriver::isStandardBaudrate(uint32_t baudRate) {
+    for (size_t i = 0; i < NUM_STANDARD_BAUDRATES; i++) {
+        if (STANDARD_BAUDRATES[i] == baudRate) {
+            return true;
+        }
+    }
+    return false;
 }
 
 
@@ -557,9 +645,9 @@ UartDmaDriver::Result UartDmaDriver::startDMA() {
                          0,            // Length will be set by send()
                          false);              // Don't start yet
     
-    // Create a new clean timer
+    // Create a new clean timer with configurable tick period
     bool addTimerRes = add_repeating_timer_us(
-        WATCHDOG_TIMER_TICK_US,
+        _watchdogTickUs,
         UartDmaDriver_rxWatchdogTimerCb,
         this,
         &_watchdogTimerHandle
@@ -594,7 +682,7 @@ inline void UartDmaDriver::stopDMA() {
 
     // Cancel the watchdog timer
     cancel_repeating_timer(&_watchdogTimerHandle);
-    constexpr uint32_t wdGraceTimeMs = (UART_WD_TICK_US * (UART_WD_SILENCE_TICKS + 1)) / 1000 + 1;
+    uint32_t wdGraceTimeMs = (_watchdogTickUs * (_watchdogSilenceTicks + 1)) / 1000 + 1;
     
     // Let a small delay to finish any pending WD operations (only if scheduler running)
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
@@ -719,7 +807,7 @@ bool UartDmaDriver::onRxWatchdogTimer() {
     size_t chunkSize = 0;
     bool isSilence = false; // Track silence state
 
-    if (_silenceTicks >= WATCHDOG_TIMER_SILENCE_TICKS) {
+    if (_silenceTicks >= _watchdogSilenceTicks) {
         // Silence detected - push any available data (partial chunk for reactivity)
         if (available > 0) {
             shouldPushChunk = true;

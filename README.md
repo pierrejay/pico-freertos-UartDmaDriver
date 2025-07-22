@@ -256,6 +256,27 @@ enum EventType {
     *   Indicates if the application is not consuming events fast enough.
     *   **Reset:** Counter is reset when calling `start()` or driver reinitialization.
 
+### Runtime Configuration
+
+    Normally, the driver is configured using compile flags (see `Driver Configuration` section) but out of convenience, the API provides methods to change Watchdog timing & baud rate at runtime, enforcing the same safety rules than with static asserts. Those methods can only be called if the driver is in `STATE_OFF` state.
+
+*   **`Result setWatchdogTiming(uint32_t tickUs, uint8_t silenceTicks)`**
+    Configures the watchdog timer parameters at runtime.
+    *   `tickUs`: Watchdog timer tick period in microseconds (100-10000)
+    *   `silenceTicks`: Number of ticks to consider as silence (2-20)
+    *   **Returns:** `SUCCESS` if configuration was set, error otherwise
+
+*   **`Result setBaudrate(uint32_t baudRate)`**
+    Changes the UART baud rate at runtime (hot change when safe).
+    *   `baudRate`: New baud rate (must be a standard rate)
+    *   **Returns:** `SUCCESS` if baud rate was changed, error otherwise
+    *   **Thread-Safe:** Protected by mutex, waits for TX completion
+
+*   **`static bool isStandardBaudrate(uint32_t baudRate)`**
+    Validates if a baud rate is in the list of supported standard rates.
+    *   **Returns:** `true` if baud rate is standard (9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
+    *   **Usage:** Helper method for validation before calling `setBaudrate()`
+
 ### TX - Asynchronous Transmission
 
 *   **`Result send(const uint8_t* data, size_t len, TickType_t waitTicks = portMAX_DELAY)`**
@@ -456,7 +477,14 @@ These compile-time checks ensure that any chosen configuration forms a logically
 
 The `init()` method provides the final layer of safety by **enforcing the contract** established at compile-time. It will fail and return an error if the requested `baudRate` exceeds the `UART_RX_MAX_BAUDRATE` value that was used for all safety calculations.
 
-This two-stage process ensures that the driver's real-time performance characteristics are always coherent with its configuration.
+**3. Standard Baud Rate Enforcement**
+
+The driver enforces the use of **standard baud rates only** to ensure reliable timing calculations and prevent timing-related issues using the chip's standard UART baud range:
+
+*   **Supported rates:** 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 baud
+*   **Validation:** Both `init()` and `setBaudrate()` will reject non-standard rates with `ERR_CONFIG`
+
+This three-stage process (compile-time checks + runtime validation + standard rate enforcement) ensures that the driver's real-time performance characteristics are always coherent with its configuration.
 
 ## Multi-Instance Support
 
