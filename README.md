@@ -258,7 +258,7 @@ enum EventType {
 
 ### Runtime Configuration
 
-    Normally, the driver is configured using compile flags (see `Driver Configuration` section) but out of convenience, the API provides methods to change Watchdog timing & baud rate at runtime, enforcing the same safety rules than with static asserts. Those methods can only be called if the driver is in `STATE_OFF` state.
+Normally, the driver is configured using compile flags (see `Driver Configuration` section) but out of convenience, the API provides methods to change Watchdog timing & baud rate at runtime, enforcing the same safety rules than with static asserts. Those methods can only be called if the driver is in `STATE_OFF` state.
 
 *   **`Result setWatchdogTiming(uint32_t tickUs, uint8_t silenceTicks)`**
     Configures the watchdog timer parameters at runtime.
