@@ -2,6 +2,9 @@
 
 #pragma once
 
+#ifndef _UARTDMADRIVER_UARTDMADRIVER_HPP_
+#define _UARTDMADRIVER_UARTDMADRIVER_HPP_
+
 #include <stdint.h>
 #include <stddef.h>
 #include <cstdio>
@@ -296,3 +299,5 @@ private:
 // Watchdog & DMA IRQ handlers
 bool UartDmaDriver_rxWatchdogTimerCb(struct repeating_timer *t);
 void UartDmaDriver_dmaIrqCb();
+
+#endif // _UARTDMADRIVER_UARTDMADRIVER_HPP_

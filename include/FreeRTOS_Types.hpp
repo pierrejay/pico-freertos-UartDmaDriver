@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef _UARTDMADRIVER_FREERTOS_TYPES_HPP_
+#define _UARTDMADRIVER_FREERTOS_TYPES_HPP_
+
 #include <FreeRTOS.h>
 #include <semphr.h>
 
@@ -67,3 +70,5 @@ private:
 };
 
 } // namespace UartDmaSync
+
+#endif // _UARTDMADRIVER_FREERTOS_TYPES_HPP_
